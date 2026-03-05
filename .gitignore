@@ -44,9 +44,6 @@ Thumbs.db
 .kiro/settings/.env.local
 .kiro/settings/.env
 
-# direnv
-.envrc
-
 # Temporary files
 /tmp/
 *.tmp

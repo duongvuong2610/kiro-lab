@@ -1,6 +1,7 @@
 # Root-level Terraform configuration
 # This file enables terraform fmt and terraform validate to work
 # across all modules without needing to run terraform init in each module
+# CI/CD: Workflow triggers on changes to .tf files
 
 terraform {
   required_version = ">= 1.5.0"
