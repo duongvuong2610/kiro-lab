@@ -15,8 +15,8 @@ public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
 private_subnet_cidrs = ["10.0.3.0/24", "10.0.4.0/24"]
 
 # Compute Configuration (cost-effective for dev)
-task_cpu        = "256"          # 0.25 vCPU
-task_memory     = "512"          # 512 MB
+task_cpu        = "256"                                                            # 0.25 vCPU
+task_memory     = "512"                                                            # 512 MB
 container_image = "471112857175.dkr.ecr.us-east-1.amazonaws.com/cmc-ts-app:latest" # Replace with your application image
 container_port  = 80
 desired_count   = 2
