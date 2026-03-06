@@ -1,0 +1,280 @@
+name: Terraform CI/CD
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - 'modules/**'
+      - 'environments/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  terraform-plan-dev:
+    name: Plan Dev Environment
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+      
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: false
+        
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      
+      - name: Terraform Init (Dev)
+        id: init
+        run: terraform init
+        working-directory: environments/dev
+        continue-on-error: false
+      
+      - name: Terraform Validate (Dev)
+        id: validate
+        run: terraform validate
+        working-directory: environments/dev
+        continue-on-error: false
+      
+      - name: Terraform Plan (Dev)
+        id: plan
+        run: terraform plan -no-color -out=tfplan
+        working-directory: environments/dev
+        continue-on-error: false
+      
+      - name: Post Plan to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PLAN_OUTPUT: ${{ steps.plan.outputs.stdout }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+            #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+            #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+            #### Terraform Plan 📖\`${{ steps.plan.outcome }}\`
+            
+            <details><summary>Show Plan</summary>
+            
+            \`\`\`terraform
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+            
+            </details>
+            
+            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`, Workflow: \`${{ github.workflow }}\`*`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+      
+      - name: Check for Failures
+        if: steps.fmt.outcome == 'failure' || steps.init.outcome == 'failure' || steps.validate.outcome == 'failure' || steps.plan.outcome == 'failure'
+        run: |
+          echo "One or more validation steps failed"
+          exit 1
+
+  terraform-apply-dev:
+    name: Apply to Dev Environment
+    runs-on: ubuntu-latest
+    needs: terraform-plan-dev
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      
+      - name: Terraform Init (Dev)
+        run: terraform init
+        working-directory: environments/dev
+      
+      - name: Terraform Apply (Dev)
+        run: terraform apply -auto-approve
+        working-directory: environments/dev
+      
+      - name: Terraform Output (Dev)
+        run: terraform output -json > ../../dev-outputs.json
+        working-directory: environments/dev
+        continue-on-error: false
+      
+      - name: Upload Dev Outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-deployment-outputs
+          path: dev-outputs.json
+          retention-days: 30
+      
+      - name: Post Dev Deployment Summary
+        if: success()
+        run: |
+          echo "## Dev Deployment Successful ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Dev Environment Outputs" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          cat dev-outputs.json >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  terraform-destroy-dev:
+    name: Destroy Dev Environment
+    runs-on: ubuntu-latest
+    if: always()
+    environment:
+      name: destroy-dev
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      
+      - name: Terraform Init (Dev)
+        run: terraform init
+        working-directory: environments/dev
+      
+      - name: Terraform Destroy (Dev)
+        run: terraform destroy -auto-approve
+        working-directory: environments/dev
+      
+      - name: Post Destroy Summary
+        if: success()
+        run: |
+          echo "## Dev Infrastructure Destroyed ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All resources in dev environment have been destroyed." >> $GITHUB_STEP_SUMMARY
+
+  terraform-apply-prod:
+    name: Apply to Prod Environment
+    runs-on: ubuntu-latest
+    needs: terraform-apply-dev
+    if: success()
+    environment:
+      name: production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      
+      - name: Terraform Init (Prod)
+        run: terraform init
+        working-directory: environments/prod
+      
+      - name: Terraform Plan (Prod)
+        run: terraform plan -no-color
+        working-directory: environments/prod
+      
+      - name: Terraform Apply (Prod)
+        run: terraform apply -auto-approve
+        working-directory: environments/prod
+      
+      - name: Terraform Output (Prod)
+        run: terraform output -json > ../../prod-outputs.json
+        working-directory: environments/prod
+        continue-on-error: false
+      
+      - name: Upload Prod Outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: prod-deployment-outputs
+          path: prod-outputs.json
+          retention-days: 90
+      
+      - name: Post Prod Deployment Summary
+        if: success()
+        run: |
+          echo "## Prod Deployment Successful ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Prod Environment Outputs" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+          cat prod-outputs.json >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  terraform-destroy-prod:
+    name: Destroy Prod Environment
+    runs-on: ubuntu-latest
+    if: always()
+    environment:
+      name: destroy-production
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.5.0
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      
+      - name: Terraform Init (Prod)
+        run: terraform init
+        working-directory: environments/prod
+      
+      - name: Terraform Destroy (Prod)
+        run: terraform destroy -auto-approve
+        working-directory: environments/prod
+      
+      - name: Post Destroy Summary
+        if: success()
+        run: |
+          echo "## Prod Infrastructure Destroyed ✅" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All resources in prod environment have been destroyed." >> $GITHUB_STEP_SUMMARY

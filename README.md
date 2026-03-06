@@ -55,212 +55,56 @@ module "networking" {
 }
 ```
 
-## Backend Setup Procedures
+## Quick Start
 
-Terraform requires a remote backend for state management to enable team collaboration and prevent concurrent modifications. This project uses AWS S3 for state storage and DynamoDB for state locking.
+For complete deployment instructions, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
-### Step 1: Create S3 Bucket for State Storage
+### Backend Setup
 
-Create an S3 bucket to store Terraform state files. Replace `YOUR_ACCOUNT_ID` with your AWS account ID:
+The Terraform backend is already configured with:
+- S3 Bucket: `terraform-state-471112857175`
+- DynamoDB Table: `terraform-state-lock`
+- Region: `us-east-1`
 
-```bash
-# Set your AWS account ID
-export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-
-# Create S3 bucket for Terraform state
-aws s3api create-bucket \
-  --bucket terraform-state-${AWS_ACCOUNT_ID} \
-  --region us-east-1
-
-# Enable versioning on the state bucket
-aws s3api put-bucket-versioning \
-  --bucket terraform-state-${AWS_ACCOUNT_ID} \
-  --versioning-configuration Status=Enabled
-
-# Enable encryption for the state bucket
-aws s3api put-bucket-encryption \
-  --bucket terraform-state-${AWS_ACCOUNT_ID} \
-  --server-side-encryption-configuration '{
-    "Rules": [{
-      "ApplyServerSideEncryptionByDefault": {
-        "SSEAlgorithm": "AES256"
-      }
-    }]
-  }'
-
-# Block public access to the state bucket
-aws s3api put-public-access-block \
-  --bucket terraform-state-${AWS_ACCOUNT_ID} \
-  --public-access-block-configuration \
-    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-```
-
-### Step 2: Create DynamoDB Table for State Locking
-
-Create a DynamoDB table to enable state locking and prevent concurrent modifications:
-
-```bash
-aws dynamodb create-table \
-  --table-name terraform-state-lock \
-  --attribute-definitions AttributeName=LockID,AttributeType=S \
-  --key-schema AttributeName=LockID,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST \
-  --region us-east-1
-```
-
-### Step 3: Verify Backend Resources
-
-Verify that the S3 bucket and DynamoDB table were created successfully:
-
-```bash
-# Verify S3 bucket
-aws s3api head-bucket --bucket terraform-state-${AWS_ACCOUNT_ID}
-
-# Verify DynamoDB table
-aws dynamodb describe-table --table-name terraform-state-lock --query 'Table.TableStatus'
-```
-
-### Step 4: Update Backend Configuration
-
-Update the `backend.tf` files in each environment directory (`environments/dev/backend.tf` and `environments/prod/backend.tf`) with your AWS account ID:
-
-```hcl
-terraform {
-  backend "s3" {
-    bucket         = "terraform-state-YOUR_ACCOUNT_ID"  # Replace with your account ID
-    key            = "dev/terraform.tfstate"            # Use "prod/terraform.tfstate" for prod
-    region         = "us-east-1"
-    dynamodb_table = "terraform-state-lock"
-    encrypt        = true
-  }
-}
-```
+For detailed backend setup instructions, see [docs/BACKEND_SETUP.md](docs/BACKEND_SETUP.md).
 
 ## Deploying the Infrastructure
 
-### Initial Setup (One-Time)
+For complete step-by-step deployment instructions, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
-Before deploying to any environment, initialize Terraform at the root level:
-
-```bash
-# Initialize Terraform (downloads providers, enables validation/formatting)
-terraform init
-```
-
-This allows you to run `terraform fmt` and `terraform validate` from the root directory across all modules without needing to initialize each module separately.
-
-### Development Environment
-
-1. **Navigate to the dev environment directory:**
+### Quick Deploy
 
 ```bash
+# 1. Build and push Docker image (MUST use linux/amd64 architecture)
+cd example-app
+docker buildx build --platform linux/amd64 -t cmc-ts-app:latest .
+# ... push to ECR (see DEPLOYMENT.md)
+
+# 2. Create Parameter Store secrets
+aws ssm put-parameter --name "/dev/app/db_password" --value "PASSWORD" --type SecureString --region us-east-1 --profile kiro-lab
+
+# 3. Deploy infrastructure
 cd environments/dev
-```
-
-2. **Initialize Terraform:**
-
-```bash
-terraform init
-```
-
-3. **Review the execution plan:**
-
-```bash
-terraform plan
-```
-
-4. **Apply the configuration:**
-
-```bash
-terraform apply
-```
-
-5. **Note the outputs:**
-
-After successful deployment, Terraform will output important information like the ALB DNS name, RDS endpoint, and S3 bucket name.
-
-### Production Environment
-
-Follow the same steps as above, but use the `environments/prod` directory:
-
-```bash
-cd environments/prod
 terraform init
 terraform plan
 terraform apply
+
+# 4. Force ECS deployment
+aws ecs update-service --cluster dev-cluster --service dev-service --force-new-deployment --region us-east-1 --profile kiro-lab
 ```
 
 ## Application Deployment
 
-### Example Application
+This project includes an example Node.js web application in `example-app/` that demonstrates the infrastructure.
 
-This project includes a simple example web application in the `example-app/` directory that demonstrates the infrastructure. The application:
-
-- Displays "Welcome to CMC TS" on the root endpoint
-- Provides a `/health` endpoint for ALB health checks
-- Is containerized and ready to deploy to ECS
-
-**Quick Start with Example App:**
+**CRITICAL:** Docker images MUST be built for `linux/amd64` architecture (ECS Fargate requirement):
 
 ```bash
-# Navigate to the example app directory
 cd example-app
-
-# Build the Docker image
-docker build -t cmc-ts-app:latest .
-
-# Push to Docker Hub or ECR (see example-app/README.md for detailed instructions)
+docker buildx build --platform linux/amd64 -t cmc-ts-app:latest .
 ```
 
-For complete documentation on building, pushing, and deploying the example application, see [example-app/README.md](example-app/README.md).
-
-### Prerequisites
-
-Before deploying the infrastructure, you need to:
-
-1. **Create Parameter Store secrets** for your application:
-
-```bash
-# Database password
-aws ssm put-parameter \
-  --name "/dev/app/db_password" \
-  --value "YOUR_SECURE_PASSWORD" \
-  --type SecureString \
-  --region us-east-1
-
-# Add other secrets as needed
-aws ssm put-parameter \
-  --name "/dev/app/api_key" \
-  --value "YOUR_API_KEY" \
-  --type SecureString \
-  --region us-east-1
-```
-
-2. **Build and push your container image** to Docker Hub or Amazon ECR:
-
-```bash
-# Build your application container
-docker build -t your-app:latest .
-
-# Tag and push to ECR (example)
-aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com
-docker tag your-app:latest ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/your-app:latest
-docker push ${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/your-app:latest
-```
-
-3. **Update the container image** in `environments/dev/terraform.tfvars`:
-
-```hcl
-container_image = "YOUR_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/your-app:latest"
-```
-
-### Container Requirements
-
-Your application container must:
-
-- Expose a port (default: 80)
-- Implement a `/health` endpoint that returns HTTP 200 when healthy
-- Read secrets from environment variables (automatically injected from Parameter Store)
+For complete instructions, see [DEPLOYMENT.md](DEPLOYMENT.md) and [example-app/README.md](example-app/README.md).
 
 ## Cost Optimization
 
@@ -362,47 +206,25 @@ terraform fmt -check -recursive
 
 The root `main.tf` includes dummy module calls with `count = 0` that enable validation of all module code without actually creating resources. This ensures `terraform validate` checks networking, compute, database, and storage modules.
 
-## Troubleshooting
+## Documentation
 
-### State Lock Issues
-
-If Terraform reports a state lock error:
-
-```bash
-# Force unlock (use with caution)
-terraform force-unlock LOCK_ID
-```
-
-### Backend Initialization Errors
-
-If `terraform init` fails with backend errors:
-
-1. Verify S3 bucket and DynamoDB table exist
-2. Check AWS credentials have necessary permissions
-3. Ensure bucket name in `backend.tf` matches your actual bucket
-
-### Resource Creation Failures
-
-If `terraform apply` fails:
-
-1. Review error messages for specific resource issues
-2. Check AWS service quotas and limits
-3. Verify IAM permissions are sufficient
-4. Review CloudWatch logs for ECS task failures
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** - Complete deployment guide with step-by-step instructions
+- **[README.md](README.md)** - Project overview and architecture (this file)
+- **[docs/BACKEND_SETUP.md](docs/BACKEND_SETUP.md)** - Detailed backend setup and troubleshooting
+- **[docs/AWS_RESOURCES.md](docs/AWS_RESOURCES.md)** - List of all AWS resources created
+- **[docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md)** - Project structure and module documentation
+- **[example-app/README.md](example-app/README.md)** - Example application documentation
 
 ## Cleanup
 
-To destroy all infrastructure resources:
+To destroy all infrastructure:
 
 ```bash
 cd environments/dev
 terraform destroy
-
-cd ../prod
-terraform destroy
 ```
 
-**Warning**: This will permanently delete all resources. Ensure you have backups of any important data.
+For complete cleanup instructions, see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## Contributing
 
