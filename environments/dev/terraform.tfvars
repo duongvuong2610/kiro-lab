@@ -1,0 +1,34 @@
+# Dev Environment Configuration
+# This file contains environment-specific values for the dev environment
+# Values are optimized for cost-effectiveness and development workloads
+
+# Environment identifier
+environment = "dev"
+
+# AWS Region
+aws_region = "us-east-1"
+
+# Networking Configuration
+vpc_cidr             = "10.0.0.0/16"
+availability_zones   = ["us-east-1a", "us-east-1b"]
+public_subnet_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
+private_subnet_cidrs = ["10.0.3.0/24", "10.0.4.0/24"]
+
+# Compute Configuration (cost-effective for dev)
+task_cpu        = "256"          # 0.25 vCPU
+task_memory     = "512"          # 512 MB
+container_image = "471112857175.dkr.ecr.us-east-1.amazonaws.com/cmc-ts-app:latest" # Replace with your application image
+container_port  = 80
+desired_count   = 2
+
+# Database Configuration (small instance for dev)
+db_instance_class  = "db.t3.micro"
+database_name      = "appdb"
+db_master_username = "dbadmin"
+# Note: db_master_password should be set via environment variable or AWS Parameter Store
+# Example: export TF_VAR_db_master_password="your-secure-password"
+
+# Storage Configuration
+versioning_enabled     = true
+lifecycle_ia_days      = 30
+lifecycle_glacier_days = 90
